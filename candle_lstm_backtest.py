@@ -21,6 +21,7 @@ Target:
 import warnings
 warnings.filterwarnings("ignore")
 
+import random
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -43,10 +44,10 @@ SYMBOL           = "BTC/USDT:USDT"
 TIMEFRAME        = "15m"
 N_INPUT          = 10
 N_OUTPUT         = 3
-FETCH_CANDLES    = 70_080 + 500
+FETCH_CANDLES    = 140_160 + 500   # 4년(140160봉, 15분봉×4×24×365×4) + 여유
 FETCH_CANDLES_FR = 2_500
 THRESHOLDS       = [0.60, 0.65, 0.70, 0.75]
-SIGNAL_THRESHOLD = 0.6    # 시뮬레이션 롱 진입 최소 확률
+SIGNAL_THRESHOLD = 0.55  # 시뮬레이션 롱 진입 최소 확률
 FEE_RATE         = 0.0005   # 편도 수수료 0.05% (taker), 왕복 0.10%
 
 TRAIN_RATIO      = 0.8     # 전체의 80% → train+val
@@ -63,8 +64,20 @@ PATIENCE         = 7       # early stopping patience
 
 SEQ_FEAT_DIM     = 5       # Layer 1: per-candle feature 수
 CTX_FEAT_DIM     = 5       # Layer 2: 윈도우 요약 feature 수
+SEED             = 42      # 재현성 고정 시드
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def set_seed(seed: int = SEED):
+    """모든 랜덤 요소 고정 → 동일 코드 실행 시 동일 결과 보장"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark     = False
 
 
 # =============================================================
@@ -76,7 +89,7 @@ def fetch_data():
     df_fr = fetch_funding_rate(SYMBOL, total=FETCH_CANDLES_FR)
     df    = df.iloc[:-1]
 
-    cutoff = df.index[-1] - pd.DateOffset(years=2)
+    cutoff = df.index[-1] - pd.DateOffset(years=4)
     warmup_hours = (N_INPUT + N_OUTPUT) * 15 / 60
     df = df[df.index >= cutoff - pd.Timedelta(hours=warmup_hours)]
 
@@ -561,6 +574,7 @@ def simulate_and_plot(res: pd.DataFrame,
 # MAIN
 # =============================================================
 if __name__ == "__main__":
+    set_seed()                             # ← 랜덤 시드 고정 (재현성 보장)
     df_raw, df_fr              = fetch_data()
     df                         = compute_indicators(df_raw, df_fr)
     seq, ctx, y, times, eo, ec = build_feature_matrix(df)
