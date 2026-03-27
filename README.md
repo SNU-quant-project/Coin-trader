@@ -61,9 +61,25 @@ cp .env.example .env
 python tests/test_connection.py
 ```
 
-### 데이터 다운로드
+### 데이터 다운로드 (권장)
 
-`download_all.py`에서 원하는 코인의 주석을 해제하고 실행합니다.
+수집된 데이터를 구글 드라이브에서 직접 받을 수 있습니다.
+
+**[구글 드라이브에서 다운로드](https://drive.google.com/drive/folders/1CU-CUAQYkk_GmXJ4YbSFZzR5yY_k5iVT?usp=drive_link)**
+
+다운받은 CSV 파일들을 `data/historical/` 폴더에 넣으면 됩니다.
+
+```
+data/historical/
+├── BTC_USDT_1m.csv
+├── ETH_USDT_1m.csv
+├── XRP_USDT_1m.csv
+└── SOL_USDT_1m.csv
+```
+
+### 직접 다운로드 (선택)
+
+구글 드라이브 대신 직접 바이낸스에서 받으려면 `download_all.py`에서 원하는 코인의 주석을 해제하고 실행합니다.
 
 ```bash
 python download_all.py
