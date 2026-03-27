@@ -29,7 +29,7 @@ class Storage:
         if os.path.exists(filepath):
             existing = pd.read_csv(filepath)
             df_combined = pd.concat([existing, df], ignore_index=True)
-            df_combined = df_combined.drop_duplicates(subset=["timestamp"]).sort_values("timestamp")
+            df_combined = df_combined.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
             df_combined.to_csv(filepath, index=False)
             logger.info(f"{symbol} 데이터 추가 저장: {len(candles)}개 (총 {len(df_combined)}개)")
         else:
