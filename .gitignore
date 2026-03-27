@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# 데이터 파일 (용량이 크므로 GitHub에 올리지 않음)
+data/historical/*.csv
+*.db
+*.sqlite3

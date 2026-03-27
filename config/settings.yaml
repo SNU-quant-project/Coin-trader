@@ -1,0 +1,39 @@
+# Crypto Trading System 설정
+
+exchange:
+  name: "binance"
+  type: "spot"
+  testnet: false
+
+symbols:
+  - "BTC/USDT"
+  - "ETH/USDT"
+  - "XRP/USDT"
+  - "SOL/USDT"
+
+collector:
+  interval: 60
+  batch_size: 100
+  retry_count: 3
+  retry_delay: 5
+
+storage:
+  base_path: "data/historical"
+  format: "csv"
+  split_by: "month"
+
+downloader:
+  default_timeframe: "1m"
+  max_candles_per_request: 1000
+  sleep_between_requests: 0.5
+
+logging:
+  level: "INFO"
+  console: true
+  file: true
+  log_dir: "logs"
+  max_file_size_mb: 10
+  backup_count: 5
+
+notification:
+  enabled: false
