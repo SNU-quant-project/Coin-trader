@@ -5,8 +5,10 @@
 ## 현재 상태
 
 - [x] 과거 데이터 수집 (BTC, ETH, XRP, SOL / 1분봉 / 2019-01-01 ~)
-- [ ] 전략 개발
-- [ ] 백테스터
+- [x] 백테스터 (look-ahead bias 제거, 수수료 반영, 롱/숏)
+- [x] MA 교차 전략
+- [x] 백테스트 결과 시각화 (인터랙티브 HTML)
+- [ ] 추가 전략 개발
 - [ ] 자동매매 봇
 - [ ] 대시보드
 
@@ -20,13 +22,21 @@ Coin-trader/
 │   ├── historical/     # CSV 데이터 저장 위치 (gitignore)
 │   ├── downloader.py   # 과거 데이터 다운로더
 │   └── storage.py      # 데이터 저장/로드
-├── strategy/           # 매매 전략 (개발 예정)
-├── backtester/         # 백테스터 (개발 예정)
+├── strategy/
+│   ├── base.py         # 전략 베이스 클래스
+│   └── ma_cross.py     # 이동평균 교차 전략
+├── backtester/
+│   ├── engine.py       # 백테스트 엔진 (바 단위 시뮬레이션)
+│   ├── portfolio.py    # 포지션 및 자산 관리
+│   ├── report.py       # 성과 지표 출력
+│   └── visualizer.py   # 인터랙티브 차트 생성
 ├── bot/                # 자동매매 봇 (개발 예정)
 ├── dashboard/          # 대시보드 (개발 예정)
 ├── tests/              # 연결 및 기능 테스트
-├── download_all.py     # 데이터 다운로드 실행 스크립트
-└── check_all_data.py   # 저장된 데이터 현황 확인
+├── download_all.py     # 데이터 다운로드 스크립트
+├── update_all.py       # 데이터 증분 업데이트 스크립트
+├── check_all_data.py   # 저장된 데이터 현황 확인
+└── run_backtest.py     # 백테스트 실행 스크립트
 ```
 
 ## 설치
@@ -85,13 +95,70 @@ data/historical/
 python download_all.py
 ```
 
-코인별로 순서대로 실행하도록 주석 처리되어 있습니다.
-(BTC 기준 약 2시간 30분 소요)
+코인별로 순서대로 실행하도록 주석 처리되어 있습니다. (BTC 기준 약 2시간 30분 소요)
+
+### 데이터 증분 업데이트
+
+이미 다운받은 데이터에서 최신 데이터만 추가로 받습니다.
+
+```bash
+python update_all.py
+```
 
 ### 데이터 현황 확인
 
 ```bash
 python check_all_data.py
+```
+
+## 백테스트
+
+### 실행
+
+```bash
+python run_backtest.py
+```
+
+결과 지표(수익률, MDD, 샤프 지수 등)가 출력되고 `backtest_result.html`이 생성됩니다.
+브라우저에서 열면 가격 차트, 이동평균선, 거래 시점, 자산 곡선을 인터랙티브하게 확인할 수 있습니다.
+
+### 주요 파라미터 (`run_backtest.py`)
+
+```python
+strategy = MACrossStrategy(
+    fast_period=10,      # 단기 이동평균 기간
+    slow_period=60,      # 장기 이동평균 기간
+    min_diff_pct=0.3,    # MA 간격이 가격의 N% 이상일 때만 교차 인정 (노이즈 필터)
+)
+engine = Engine(
+    strategy,
+    initial_capital=10_000.0,  # 초기 자산 (USDT)
+    fee_rate=0.001,             # 수수료 (0.1%)
+    cooldown=1440,              # 거래 후 최소 대기 바 수 (1440 = 1일)
+)
+```
+
+### 백테스터 설계 원칙
+
+- **look-ahead bias 제거**: 바 i의 시그널 → 바 i+1 시가에 체결
+- **수수료 반영**: 진입/청산 시 각각 0.1% 적용
+- **강제 청산**: 자산이 0 이하가 되면 즉시 청산 (음수 자산 방지)
+- **롱/숏 모두 지원**
+
+## 새로운 전략 추가
+
+`strategy/base.py`의 `BaseStrategy`를 상속하여 `generate_signals()`를 구현합니다.
+
+```python
+from strategy.base import BaseStrategy
+import numpy as np
+import pandas as pd
+
+class MyStrategy(BaseStrategy):
+    def generate_signals(self, df: pd.DataFrame) -> np.ndarray:
+        # 반환: np.ndarray (int8), 1=롱, -1=숏, 0=중립
+        # 주의: rolling() 등 과거 데이터만 사용 (look-ahead bias 금지)
+        ...
 ```
 
 ## 설정
