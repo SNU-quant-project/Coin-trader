@@ -2,7 +2,7 @@
 백테스트 결과 시각화 (인터랙티브 HTML)
 
 차트 구성:
-  1. 가격 + MA선 + 매수/매도 시점
+  1. 가격 + Donchian 채널 (상단/하단) + 매수/매도 시점
   2. 자산 곡선 (equity curve)
 
 조작법:
@@ -10,6 +10,10 @@
   - 더블클릭: 전체 보기로 복귀
   - 상단 툴바 → '축 고정 해제' 후 각 축 독립 스크롤 가능
   - shift + 드래그: y축 이동
+
+전략 호환:
+  - DonchianBreakoutStrategy: 진입/청산 채널 표시
+  - MACrossStrategy: 이동평균선 표시 (기존 호환)
 """
 
 import numpy as np
@@ -25,20 +29,54 @@ def plot(result: dict, df: pd.DataFrame, strategy, output_path: str = "backtest_
     equity_curve = result['equity_curve']
     trades = result['trades']
 
-    # ── 1시간봉으로 다운샘플링 (차트 렌더링 성능) ─────────────
+    # ── 전략 타입 감지 ────────────────────────────────────────
+    is_donchian = hasattr(strategy, 'entry_period') and hasattr(strategy, 'exit_period')
+    is_ma_cross = hasattr(strategy, 'fast_period') and hasattr(strategy, 'slow_period')
+
+    # ── 다운샘플링 (차트 렌더링 성능) ─────────────────────────
+    # 4시간봉 이하면 일봉으로 리샘플, 일봉 이상이면 그대로 사용
     df['_equity'] = equity_curve
-    df_plot = df.set_index('datetime').resample('1D').agg({
-        'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last',
-        '_equity': 'last',
-    }).dropna().reset_index()
 
-    # 일봉 기준 MA (원본 분봉 파라미터와 별개로 일봉에서 보기 좋은 값 사용)
-    fast_ma_plot = df_plot['close'].rolling(10).mean()
-    slow_ma_plot = df_plot['close'].rolling(30).mean()
-    datetimes    = df_plot['datetime']
-    equity_plot  = df_plot['_equity']
+    # 데이터 포인트가 1000개 이하면 리샘플링 불필요
+    if len(df) > 1000:
+        df_plot = df.set_index('datetime').resample('1D').agg({
+            'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last',
+            '_equity': 'last',
+        }).dropna().reset_index()
+    else:
+        df_plot = df.copy()
 
-    # ── 거래 시점 (entry_dt 기준 직접 매칭) ───────────────────
+    datetimes   = df_plot['datetime']
+    equity_plot = df_plot['_equity']
+
+    # ── 전략별 보조선 계산 ────────────────────────────────────
+    if is_donchian:
+        # 차트용 Donchian 채널 (일봉 기준으로 재계산)
+        # 원본 전략의 기간을 일수로 환산
+        entry_days = strategy.entry_period // 6  # 4시간봉 → 일수
+        exit_days = strategy.exit_period // 6
+
+        upper_line = df_plot['high'].rolling(entry_days).max().shift(1)
+        lower_line = df_plot['low'].rolling(exit_days).min().shift(1)
+
+        title_suffix = f"Donchian({entry_days}d/{exit_days}d)"
+        line1_name = f"진입 채널 ({entry_days}일 최고)"
+        line2_name = f"청산 채널 ({exit_days}일 최저)"
+    elif is_ma_cross:
+        # 기존 MA Cross 호환
+        upper_line = df_plot['close'].rolling(10).mean()
+        lower_line = df_plot['close'].rolling(30).mean()
+        title_suffix = f"MA{strategy.fast_period}/MA{strategy.slow_period}"
+        line1_name = f"MA{strategy.fast_period}"
+        line2_name = f"MA{strategy.slow_period}"
+    else:
+        upper_line = None
+        lower_line = None
+        title_suffix = "Custom Strategy"
+        line1_name = ""
+        line2_name = ""
+
+    # ── 거래 시점 (entry_dt 기준) ─────────────────────────────
     long_entries  = [t for t in trades if t['direction'] ==  1]
     short_entries = [t for t in trades if t['direction'] == -1]
 
@@ -55,63 +93,101 @@ def plot(result: dict, df: pd.DataFrame, strategy, output_path: str = "backtest_
     long_times,  long_prices  = match_trade_times(long_entries)
     short_times, short_prices = match_trade_times(short_entries)
 
+    # 청산 시점도 표시 (Donchian 전략에서 유용)
+    exit_times, exit_prices = [], []
+    for t in trades:
+        if t['exit_dt'] is None:
+            continue
+        exit_times.append(pd.Timestamp(t['exit_dt']))
+        exit_prices.append(float(t['exit_price']))
+
     # ── 서브플롯 ──────────────────────────────────────────────
     fig = make_subplots(
         rows=2, cols=1,
         shared_xaxes=True,
         row_heights=[0.65, 0.35],
         vertical_spacing=0.06,
-        subplot_titles=("가격 & 이동평균", "자산 곡선 (Equity Curve)")
+        subplot_titles=("가격 & 채널", "자산 곡선 (Equity Curve)")
     )
 
-    # 가격
+    # 가격 (종가)
     fig.add_trace(go.Scatter(
         x=datetimes, y=df_plot['close'],
         name='종가', line=dict(color='#888888', width=1),
         hovertemplate='%{x}<br>종가: %{y:,.2f}<extra></extra>'
     ), row=1, col=1)
 
-    # MA 선
-    fig.add_trace(go.Scatter(
-        x=datetimes, y=fast_ma_plot,
-        name=f'MA{strategy.fast_period}',
-        line=dict(color='#f5a623', width=1.5),
-        hovertemplate=f'MA{strategy.fast_period}: %{{y:,.2f}}<extra></extra>'
-    ), row=1, col=1)
+    # 보조선 (채널 또는 MA)
+    if upper_line is not None:
+        fig.add_trace(go.Scatter(
+            x=datetimes, y=upper_line,
+            name=line1_name,
+            line=dict(color='#4a90e2', width=1.2, dash='dot'),
+            hovertemplate=f'{line1_name}: %{{y:,.2f}}<extra></extra>'
+        ), row=1, col=1)
 
-    fig.add_trace(go.Scatter(
-        x=datetimes, y=slow_ma_plot,
-        name=f'MA{strategy.slow_period}',
-        line=dict(color='#4a90e2', width=1.5),
-        hovertemplate=f'MA{strategy.slow_period}: %{{y:,.2f}}<extra></extra>'
-    ), row=1, col=1)
+    if lower_line is not None:
+        fig.add_trace(go.Scatter(
+            x=datetimes, y=lower_line,
+            name=line2_name,
+            line=dict(color='#e74c3c', width=1.2, dash='dot'),
+            hovertemplate=f'{line2_name}: %{{y:,.2f}}<extra></extra>'
+        ), row=1, col=1)
 
-    # 롱 진입 마커 (크기 줄이고 외곽선으로 표시)
+    # Donchian 채널 사이 영역 채우기
+    if is_donchian and upper_line is not None and lower_line is not None:
+        fig.add_trace(go.Scatter(
+            x=datetimes, y=upper_line,
+            mode='lines', line=dict(width=0),
+            showlegend=False, hoverinfo='skip',
+        ), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=datetimes, y=lower_line,
+            mode='lines', line=dict(width=0),
+            fill='tonexty', fillcolor='rgba(74, 144, 226, 0.06)',
+            showlegend=False, hoverinfo='skip',
+        ), row=1, col=1)
+
+    # 롱 진입 마커
     if long_times:
         fig.add_trace(go.Scatter(
             x=long_times, y=long_prices,
             mode='markers', name='롱 진입',
             marker=dict(
                 symbol='triangle-up',
-                size=7,
+                size=9,
                 color='rgba(0,0,0,0)',
-                line=dict(color='#2ecc71', width=1.5),
+                line=dict(color='#2ecc71', width=2),
             ),
             hovertemplate='롱 진입<br>%{x}<br>%{y:,.2f}<extra></extra>'
         ), row=1, col=1)
 
-    # 숏 진입 마커
+    # 숏 진입 마커 (롱 온리에서는 없지만, 범용성을 위해 유지)
     if short_times:
         fig.add_trace(go.Scatter(
             x=short_times, y=short_prices,
             mode='markers', name='숏 진입',
             marker=dict(
                 symbol='triangle-down',
-                size=7,
+                size=9,
                 color='rgba(0,0,0,0)',
-                line=dict(color='#e74c3c', width=1.5),
+                line=dict(color='#e74c3c', width=2),
             ),
             hovertemplate='숏 진입<br>%{x}<br>%{y:,.2f}<extra></extra>'
+        ), row=1, col=1)
+
+    # 청산 마커 (× 표시)
+    if exit_times:
+        fig.add_trace(go.Scatter(
+            x=exit_times, y=exit_prices,
+            mode='markers', name='청산',
+            marker=dict(
+                symbol='x',
+                size=7,
+                color='#f39c12',
+                line=dict(width=1.5),
+            ),
+            hovertemplate='청산<br>%{x}<br>%{y:,.2f}<extra></extra>'
         ), row=1, col=1)
 
     # 자산 곡선
@@ -122,32 +198,38 @@ def plot(result: dict, df: pd.DataFrame, strategy, output_path: str = "backtest_
         hovertemplate='%{x}<br>자산: %{y:,.2f} USDT<extra></extra>'
     ), row=2, col=1)
 
+    # Buy & Hold 비교선 (초기 자본 기준)
+    if len(df_plot) > 0:
+        initial_price = df_plot['close'].iloc[0]
+        initial_capital = result.get('initial_capital', 10_000.0)
+        bnh = df_plot['close'] / initial_price * initial_capital
+        fig.add_trace(go.Scatter(
+            x=datetimes, y=bnh,
+            name='Buy & Hold', line=dict(color='#888888', width=1, dash='dash'),
+            hovertemplate='%{x}<br>B&H: %{y:,.2f} USDT<extra></extra>'
+        ), row=2, col=1)
+
     # ── 레이아웃 ──────────────────────────────────────────────
     fig.update_layout(
-        title=f'백테스트 결과 — BTC/USDT (MA{strategy.fast_period}/MA{strategy.slow_period})',
+        title=f'백테스트 결과 — BTC/USDT ({title_suffix})',
         template='plotly_dark',
         height=900,
         hovermode='x unified',
         legend=dict(orientation='h', y=1.03, x=0, font=dict(size=12)),
         dragmode='zoom',
-        # 툴바에 축 독립 줌 버튼 추가
         modebar=dict(
             add=['v1hovermode', 'togglespikelines'],
         ),
     )
 
-    # x축: 범위 슬라이더 + 독립 확대 가능
     fig.update_xaxes(
         rangeslider=dict(visible=False),
         showspikes=True,
         spikemode='across',
         fixedrange=False,
     )
-
-    # y축: 독립 확대 가능
     fig.update_yaxes(fixedrange=False)
 
-    # 하단 x축에만 슬라이더 표시
     fig.update_layout(
         xaxis2=dict(
             rangeslider=dict(visible=True, thickness=0.04),
@@ -156,7 +238,7 @@ def plot(result: dict, df: pd.DataFrame, strategy, output_path: str = "backtest_
     )
 
     fig.write_html(output_path, config={
-        'scrollZoom': True,        # 마우스 휠로 확대/축소
+        'scrollZoom': True,
         'displayModeBar': True,
         'modeBarButtonsToAdd': ['drawline', 'eraseshape'],
     })
