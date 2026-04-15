@@ -32,6 +32,8 @@ def plot(result: dict, df: pd.DataFrame, strategy, output_path: str = "backtest_
     # ── 전략 타입 감지 ────────────────────────────────────────
     is_donchian = hasattr(strategy, 'entry_period') and hasattr(strategy, 'exit_period')
     is_ma_cross = hasattr(strategy, 'fast_period') and hasattr(strategy, 'slow_period')
+    is_bollinger = hasattr(strategy, 'bb_period') and hasattr(strategy, 'bb_std')
+    is_ema_cross = hasattr(strategy, 'fast_ema') and hasattr(strategy, 'slow_ema')
 
     # ── 다운샘플링 (차트 렌더링 성능) ─────────────────────────
     # 4시간봉 이하면 일봉으로 리샘플, 일봉 이상이면 그대로 사용
@@ -59,9 +61,31 @@ def plot(result: dict, df: pd.DataFrame, strategy, output_path: str = "backtest_
         upper_line = df_plot['high'].rolling(entry_days).max().shift(1)
         lower_line = df_plot['low'].rolling(exit_days).min().shift(1)
 
-        title_suffix = f"Donchian({entry_days}d/{exit_days}d)"
+        has_ma_filter = hasattr(strategy, 'ma_filter_period')
+        if has_ma_filter:
+            ma_days = strategy.ma_filter_period // 6
+            title_suffix = f"Donchian({entry_days}d/{exit_days}d)+MA{ma_days}"
+        else:
+            title_suffix = f"Donchian({entry_days}d/{exit_days}d)"
         line1_name = f"진입 채널 ({entry_days}일 최고)"
         line2_name = f"청산 채널 ({exit_days}일 최저)"
+    elif is_bollinger:
+        # 볼린저밴드 (차트용)
+        bb_ma = df_plot['close'].rolling(strategy.bb_period).mean()
+        bb_std_val = df_plot['close'].rolling(strategy.bb_period).std()
+        upper_line = bb_ma + strategy.bb_std * bb_std_val
+        lower_line = bb_ma - strategy.bb_std * bb_std_val
+
+        title_suffix = f"BB({strategy.bb_period},{strategy.bb_std}σ)+RSI({strategy.rsi_period})"
+        line1_name = f"BB 상단 ({strategy.bb_std}σ)"
+        line2_name = f"BB 하단 ({strategy.bb_std}σ)"
+    elif is_ema_cross:
+        # EMA 크로스오버 전략
+        upper_line = df_plot['close'].ewm(span=strategy.fast_ema, adjust=False).mean()
+        lower_line = df_plot['close'].ewm(span=strategy.slow_ema, adjust=False).mean()
+        title_suffix = f"EMA({strategy.fast_ema}/{strategy.slow_ema})+MA{strategy.ma_filter // 6}"
+        line1_name = f"EMA {strategy.fast_ema} (단기)"
+        line2_name = f"EMA {strategy.slow_ema} (장기)"
     elif is_ma_cross:
         # 기존 MA Cross 호환
         upper_line = df_plot['close'].rolling(10).mean()
@@ -134,8 +158,40 @@ def plot(result: dict, df: pd.DataFrame, strategy, output_path: str = "backtest_
             hovertemplate=f'{line2_name}: %{{y:,.2f}}<extra></extra>'
         ), row=1, col=1)
 
+    # 볼린저밴드 중간선 (청산 목표)
+    if is_bollinger:
+        bb_mid = df_plot['close'].rolling(strategy.bb_period).mean()
+        fig.add_trace(go.Scatter(
+            x=datetimes, y=bb_mid,
+            name=f'BB 중간선 ({strategy.bb_period}MA)',
+            line=dict(color='#f5a623', width=1.0, dash='dash'),
+            hovertemplate=f'BB 중간선: %{{y:,.2f}}<extra></extra>'
+        ), row=1, col=1)
+
+    # 200일 MA 필터 선 (Donchian + MA 필터 전략)
+    if is_donchian and hasattr(strategy, 'ma_filter_period'):
+        ma_days = strategy.ma_filter_period // 6
+        ma_line = df_plot['close'].rolling(ma_days).mean()
+        fig.add_trace(go.Scatter(
+            x=datetimes, y=ma_line,
+            name=f'{ma_days}일 MA (레짐 필터)',
+            line=dict(color='#f5a623', width=1.5, dash='dash'),
+            hovertemplate=f'{ma_days}일 MA: %{{y:,.2f}}<extra></extra>'
+        ), row=1, col=1)
+
+    # 100일 MA 필터 선 (EMA 크로스 전략)
+    if is_ema_cross and hasattr(strategy, 'ma_filter'):
+        ma_days = strategy.ma_filter // 6
+        ma_line = df_plot['close'].rolling(ma_days).mean()
+        fig.add_trace(go.Scatter(
+            x=datetimes, y=ma_line,
+            name=f'{ma_days}일 MA (레짐 필터)',
+            line=dict(color='#f5a623', width=1.5, dash='dash'),
+            hovertemplate=f'{ma_days}일 MA: %{{y:,.2f}}<extra></extra>'
+        ), row=1, col=1)
+
     # Donchian 채널 사이 영역 채우기
-    if is_donchian and upper_line is not None and lower_line is not None:
+    if (is_donchian or is_bollinger) and upper_line is not None and lower_line is not None:
         fig.add_trace(go.Scatter(
             x=datetimes, y=upper_line,
             mode='lines', line=dict(width=0),
